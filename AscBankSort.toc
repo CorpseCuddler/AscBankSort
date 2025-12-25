@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: AscBankSort
+## Notes: Adds Sort buttons to Bank and Guild Bank frames.
+## Author: CorpseCuddler
+## Version: 1.0
+
+AscBankSort.lua
