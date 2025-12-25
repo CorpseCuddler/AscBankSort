@@ -105,24 +105,49 @@ local sorter = {
     t = 0,
 
     pass = 0,
-    maxPass = 10,         -- how many times to retry before stopping
-	
+    maxPass = 5,         -- how many times to retry before stopping
     repassPending = false,
     repassDelay = 0,
 }
 
-
-local function GetItemNameSafe(link)
-    if not link then return nil end
-    local name = GetItemInfo(link) -- can be nil if not cached
-    return name
-end
+-- Cache item info by itemString so classification is stable during sorting
+-- (prevents fluctuating iLevel/class/subclass/name when GetItemInfo isn't fully cached).
+local itemInfoCache = {}
 
 local function GetItemString(link)
     if not link then return nil end
-    -- Pull the "item:..." payload (stable-ish)
     local itemString = link:match("|H(item:[%-:%d]+)|h")
     return itemString or link
+end
+
+local function GetCachedInfo(link)
+    if not link then
+        return {
+            name = "",
+            quality = 0,
+            iLevel = 0,
+            class = "",
+            subclass = "",
+        }
+    end
+
+    local itemString = GetItemString(link)
+    local cached = itemInfoCache[itemString]
+    if cached then
+        return cached
+    end
+
+    local name, _, quality, iLevel, _, class, subclass = GetItemInfo(link)
+    cached = {
+        name = name or itemString,
+        quality = quality or 0,
+        iLevel = iLevel or 0,
+        class = class or "",
+        subclass = subclass or "",
+        itemString = itemString,
+    }
+    itemInfoCache[itemString] = cached
+    return cached
 end
 
 local function GetSlotState(tab, slot)
@@ -130,32 +155,29 @@ local function GetSlotState(tab, slot)
     if not link then
         return nil
     end
-    local _, count, locked = GetGuildBankItemInfo(tab, slot)
-    local name = GetItemNameSafe(link) or GetItemString(link)
 
-    local _, _, quality, _, _, class, subclass = GetItemInfo(link)
-    quality = quality or 0
-    class = class or ""
-    subclass = subclass or ""
+    local _, count, locked = GetGuildBankItemInfo(tab, slot)
+    local info = GetCachedInfo(link)
 
     return {
         link = link,
-        itemString = GetItemString(link),
-        name = name,
+        itemString = info.itemString,
+        name = info.name,
         count = count or 1,
         locked = locked and true or false,
 
-        quality = quality,
-        class = class,
-        subclass = subclass,
+        quality = info.quality,
+        iLevel = info.iLevel,
+        class = info.class,
+        subclass = info.subclass,
     }
 end
 
 local function ClassifyItem(state)
     -- Returns:
-    -- isTradeGood, groupIndex, groupName, quality, subclass, name
+    -- isTradeGood, groupIndex, groupName, quality, iLevel, subclass, name
     if not state or not state.link then
-        return false, 999, "Other", 0, "", ""
+        return false, 999, "Other", 0, 0, "", ""
     end
 
     local isTrade = (state.class == "Trade Goods")
@@ -167,12 +189,12 @@ local function ClassifyItem(state)
         groupIndex = TG_GROUP_INDEX[groupName] or 999
     end
 
-    return isTrade, groupIndex, groupName, (state.quality or 0), (state.subclass or ""), (state.name or "")
+    return isTrade, groupIndex, groupName, (state.quality or 0), (state.iLevel or 0), (state.subclass or ""), (state.name or "")
 end
 
 local function ItemLess(a, b)
-    local aTrade, aGroupIdx, _, aQ, aSub, aName = ClassifyItem(a)
-    local bTrade, bGroupIdx, _, bQ, bSub, bName = ClassifyItem(b)
+    local aTrade, aGroupIdx, _, aQ, aILvl, aSub, aName = ClassifyItem(a)
+    local bTrade, bGroupIdx, _, bQ, bILvl, bSub, bName = ClassifyItem(b)
 
     -- 1) Trade goods first
     if aTrade ~= bTrade then
@@ -192,6 +214,11 @@ local function ItemLess(a, b)
     -- 4) Quality (higher first)
     if aQ ~= bQ then
         return aQ > bQ
+    end
+
+    -- 4.5) Item level (higher first)
+    if aILvl ~= bILvl then
+        return aILvl > bILvl
     end
 
     -- 5) Name A->Z
@@ -217,11 +244,9 @@ local function QueueSwap(tab, fromSlot, toSlot)
 end
 
 local function ExecuteOneSwap(job)
-    sorter.didSwapThisPass = true
     PickupGuildBankItem(job.tab, job.from)
     PickupGuildBankItem(job.tab, job.to)
 end
-
 
 local function BuildLayout(tab)
     -- Returns:
@@ -258,12 +283,12 @@ local function StartGuildBankSortCurrentTab()
         Print("Sort already running.", 1, 1, 0)
         return
     end
-	    sorter.pass = (sorter.pass or 0) + 1
+
+    sorter.pass = (sorter.pass or 0) + 1
     if sorter.maxPass and sorter.pass > sorter.maxPass then
         Print("Sort stopped (max passes reached).", 1, 0.6, 0.2)
         return
     end
-    sorter.didSwapThisPass = false
 
     if not GuildBankFrame or not GuildBankFrame:IsShown() then
         Print("Open the Guild Bank first.", 1, 0.2, 0.2)
@@ -406,23 +431,17 @@ runner:SetScript("OnUpdate", function(_, elapsed)
     if sorter.t < 0.12 then return end
     sorter.t = 0
 
-        local job = table.remove(sorter.queue, 1)
-        if not job then
+    local job = table.remove(sorter.queue, 1)
+    if not job then
         sorter.running = false
 
-        if sorter.didSwapThisPass then
-            sorter.repassPending = true
-            sorter.repassDelay = 0.40
-            Print(("Guild bank sort pass %d complete..."):format(sorter.pass or 1), 0.2, 1, 0.2)
-        else
-            -- No swaps happened, so we're truly done or blocked.
-            sorter.repassPending = false
-            Print("Guild bank sort complete.", 0.2, 1, 0.2)
-        end
+        -- Another pass usually finishes it on private servers due to lock/lag.
+        sorter.repassPending = true
+        sorter.repassDelay = 0.35
+
+        Print(("Guild bank sort pass %d complete..."):format(sorter.pass or 1), 0.2, 1, 0.2)
         return
     end
-
-
 
     ExecuteOneSwap(job)
 end)
@@ -444,12 +463,11 @@ local function CreateGuildBankButton()
         70, 22,
         "TOPRIGHT", GuildBankFrame, "TOPRIGHT", -60, -32,
         function()
-			sorter.pass = 0
-			sorter.repassPending = false
-			sorter.repassDelay = 0
-			StartGuildBankSortCurrentTab()
-		end
-
+            sorter.pass = 0
+            sorter.repassPending = false
+            sorter.repassDelay = 0
+            StartGuildBankSortCurrentTab()
+        end
     )
 end
 
