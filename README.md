@@ -5,7 +5,7 @@ C:\YOUR-INSTALL-PATH\Ascension\
 
 (or anywhere — paths just need to match inside the .bat)
 
-Edit PatchTSM.bat if needed
+Edit PatchTSM.bat to match your install location.
 
 Open PatchTSM.bat in Notepad and make sure these paths match your setup:
 
