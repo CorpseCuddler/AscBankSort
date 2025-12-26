@@ -10,7 +10,7 @@ if (!(Test-Path $MoverLuaPath)) {
 
 $src = Get-Content -Raw -Encoding UTF8 $MoverLuaPath
 
-# Backup
+# Backup once per run (timestamped)
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backup = "$MoverLuaPath.bak.$stamp"
 Copy-Item $MoverLuaPath $backup -Force
@@ -19,8 +19,9 @@ Write-Host "Backup created: $backup"
 $changed = 0
 
 # -------------------------
-# Patch 1: Reverse empty-slot scan order
-# (GetEmptySlots / findExistingStack loops)
+# Patch 1: Reverse slot scan order (affects GetEmptySlots + findExistingStack loops)
+# From: for slot = 1, TSM.getContainerNumSlotsDest(bag) do
+#   To: for slot = TSM.getContainerNumSlotsDest(bag), 1, -1 do
 # -------------------------
 $patternLoop = 'for\s+slot\s*=\s*1\s*,\s*TSM\.getContainerNumSlotsDest\(bag\)\s+do'
 $replLoop    = 'for slot = TSM.getContainerNumSlotsDest(bag), 1, -1 do'
@@ -31,7 +32,7 @@ if ($diff -gt 0) { $changed += $diff; Write-Host "Patched $diff slot loop(s) to 
 
 # -------------------------
 # Patch 2: Replace AutoStore in TSM.moveItem() (bags -> bank/guildbank)
-# This is the real fix: forces placement into exact dest slot.
+# This forces manual placement into exact dest slots (so "last slot first" actually happens).
 # -------------------------
 
 # A) bags->guildbank, existing stack branch
@@ -105,9 +106,20 @@ $before = $src
 $src = [regex]::Replace($src, $patBankEmpty, $repBankEmpty)
 if ($src -ne $before) { $changed++; Write-Host "Patched bank empty-slot deposit to manual placement." }
 
+# -------------------------
+# Patch 3: Speed up delays (0.4s -> 0.25s)
+# Adjust these values if your server/client gets desyncy.
+# -------------------------
+$before = $src
+$src = $src -replace 'TSMAPI:CreateTimeDelay\("moveItem",\s*0\.4\s*,', 'TSMAPI:CreateTimeDelay("moveItem", 0.25,'
+$src = $src -replace 'TSMAPI:CreateTimeDelay\("generateMoves",\s*0\.4\s*,', 'TSMAPI:CreateTimeDelay("generateMoves", 0.25,'
+if ($src -ne $before) { $changed++; Write-Host "Patched CreateTimeDelay from 0.4s to 0.25s (where matched)." }
+
 if ($changed -eq 0) {
   Write-Warning "No changes were applied. This usually means your file differs from the expected patterns or is already patched."
-} else {
-  Set-Content -Encoding UTF8 -NoNewline -Path $MoverLuaPath -Value $src
-  Write-Host "Done. Patched: $MoverLuaPath"
+  Write-Host "No file was written."
+  exit 0
 }
+
+Set-Content -Encoding UTF8 -NoNewline -Path $MoverLuaPath -Value $src
+Write-Host "Done. Patched: $MoverLuaPath"
