@@ -10,6 +10,7 @@ Edit PatchTSM.bat to match your install location.
 Open PatchTSM.bat in Notepad and make sure these paths match your setup:
 
 set "PS1=C:\YOUR-INSTALL-PATH\Ascension\TSM Patcher\patch-tsm-mover.ps1"
+
 set "LUA=C:\YOUR-INSTALL-PATH\Ascension\Interface\AddOns\TradeSkillMaster\Core\Mover.lua"
 
 Create a Short-Cut for the Batch file if desired.
