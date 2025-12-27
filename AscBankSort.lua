@@ -486,7 +486,7 @@ local function CreateGuildBankButton()
         "AscBankSort_GBankButton",
         "Sort",
         70, 22,
-        "TOPRIGHT", GuildBankFrame, "TOPRIGHT", -50, -40,
+        "TOPRIGHT", GuildBankFrame, "TOPRIGHT", -20, -40,
         function()
             sorter.running = false
             sorter.queue = {}
@@ -534,4 +534,5 @@ end
 if GuildBankFrame and GuildBankFrame.HookScript then
     GuildBankFrame:HookScript("OnShow", CreateGuildBankButton)
 end
+
 
