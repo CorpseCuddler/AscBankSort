@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: AscBankSort
-## Notes: Adds Sort buttons and Shift+Click guild bank deposit reserve support.
+## Notes: Adds Sort buttons and Shift+Click guild bank deposit reserve (/abs keepgold <gold>).
 ## Author: CorpseCuddler
 ## Version: 1.0
 ## SavedVariables: AscBankSortDB
