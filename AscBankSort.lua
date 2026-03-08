@@ -1,7 +1,7 @@
 -- Ascension WoW (custom 3.3.5a)
 -- Extra guild-bank quality-of-life:
 --   * Shift+Click guild bank Deposit to auto-deposit all excess gold over reserve.
---   * /abs keepgold <amount> sets reserve amount in gold (supports decimals).
+--   * /absort keepgold <amount> sets reserve amount in gold (supports decimals).
 
 local ADDON_NAME = "AscBankSort"
 local DEFAULT_KEEP_GOLD_COPPER = 0
@@ -13,17 +13,29 @@ local function Print(msg, r, g, b)
     end
 end
 
+local function EnsureDB()
+    if type(_G.AscBankSortDB) ~= "table" then
+        _G.AscBankSortDB = {}
+    end
+    AscBankSortDB = _G.AscBankSortDB
+    if type(AscBankSortDB.keepGoldCopper) ~= "number" or AscBankSortDB.keepGoldCopper < 0 then
+        AscBankSortDB.keepGoldCopper = DEFAULT_KEEP_GOLD_COPPER
+    else
+        AscBankSortDB.keepGoldCopper = math.floor(AscBankSortDB.keepGoldCopper)
+    end
+end
+
 local function GetKeepGoldCopper()
-    local keep = tonumber(AscBankSortDB and AscBankSortDB.keepGold) or DEFAULT_KEEP_GOLD_COPPER
-    keep = math.floor(keep)
-    if keep < 0 then keep = 0 end
-    return keep
+    EnsureDB()
+    return AscBankSortDB.keepGoldCopper or DEFAULT_KEEP_GOLD_COPPER
 end
 
 local function SetKeepGoldCopper(value)
+    EnsureDB()
     local keep = math.floor(tonumber(value) or 0)
     if keep < 0 then keep = 0 end
-    AscBankSortDB.keepGold = keep
+    AscBankSortDB.keepGoldCopper = keep
+    _G.AscBankSortDB = AscBankSortDB
 end
 
 local function FormatCopper(copper)
@@ -34,16 +46,24 @@ local function FormatCopper(copper)
     return tostring(amount) .. "c"
 end
 
-local function EnsureDB()
-    if type(_G.AscBankSortDB) ~= "table" then
-        _G.AscBankSortDB = {}
-    end
-    AscBankSortDB = _G.AscBankSortDB
-    if AscBankSortDB.keepGold == nil then
-        AscBankSortDB.keepGold = DEFAULT_KEEP_GOLD_COPPER
-    else
-        SetKeepGoldCopper(AscBankSortDB.keepGold)
-    end
+local function FormatMoneyShort(copper)
+    copper = math.max(0, math.floor(tonumber(copper) or 0))
+    local g = math.floor(copper / 10000)
+    local s = math.floor((copper % 10000) / 100)
+    local c = copper % 100
+    return ("%dg %ds %dc"):format(g, s, c)
+end
+
+local function ParseGoldToCopper(text)
+    if not text then return nil end
+    local cleaned = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
+    if cleaned == "" then return nil end
+
+    local value = tonumber(cleaned)
+    if not value then return nil end
+    if value < 0 then value = 0 end
+
+    return math.floor(value * 10000 + 0.5)
 end
 
 local function MakeButton(parent, name, text, width, height, point, rel, relPoint, x, y, onClick)
@@ -68,66 +88,72 @@ local function ClearCursorSafe()
     end
 end
 
-local ADDON_NAME = "AscBankSort"
-local DEFAULT_KEEP_GOLD_COPPER = 0
+local gbankDepositHooked = false
+local gbankDepositPopupHooked = false
+local autoDepositInProgress = false
 
-local function EnsureDB()
-    AscBankSortDB = AscBankSortDB or {}
-    if type(AscBankSortDB.keepGoldCopper) ~= "number" or AscBankSortDB.keepGoldCopper < 0 then
-        AscBankSortDB.keepGoldCopper = DEFAULT_KEEP_GOLD_COPPER
+local function DoReserveDeposit()
+    EnsureDB()
+    local keep = GetKeepGoldCopper()
+    local playerMoney = GetMoney() or 0
+    local toDeposit = math.max(0, playerMoney - keep)
+
+    if toDeposit <= 0 then
+        Print(("No excess gold to deposit. Reserve: %s"):format(FormatMoneyShort(keep)), 1, 1, 0)
+        return true
+    end
+
+    autoDepositInProgress = true
+    DepositGuildBankMoney(toDeposit)
+    autoDepositInProgress = false
+    Print(("Deposited %s (kept %s). Use /absort keepgold <gold> to change reserve."):format(FormatMoneyShort(toDeposit), FormatMoneyShort(keep)), 0.2, 1, 0.2)
+    return true
+end
+
+local function InterceptGuildDepositClick(self, button, originalOnClick)
+    if button == "LeftButton" and IsShiftKeyDown() and GuildBankFrame and GuildBankFrame:IsShown() then
+        if StaticPopup_Hide then
+            StaticPopup_Hide("GUILDBANK_DEPOSIT")
+        end
+        DoReserveDeposit()
+        return
+    end
+
+    if originalOnClick then
+        originalOnClick(self, button)
     end
 end
 
-local function FormatMoneyShort(copper)
-    copper = math.max(0, math.floor(tonumber(copper) or 0))
-    local g = math.floor(copper / 10000)
-    local s = math.floor((copper % 10000) / 100)
-    local c = copper % 100
-    return ("%dg %ds %dc"):format(g, s, c)
-end
-
-local function ParseGoldToCopper(text)
-    if not text then return nil end
-    local cleaned = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
-    if cleaned == "" then return nil end
-
-    local value = tonumber(cleaned)
-    if not value then return nil end
-    if value < 0 then value = 0 end
-
-    return math.floor(value * 10000 + 0.5)
-end
-
-local gbankDepositHooked = false
-local function TryHookGuildBankDepositButton()
-    if gbankDepositHooked then return end
-    if not GuildBankDepositButton or not GuildBankDepositButton.GetScript then return end
-
-    local originalOnClick = GuildBankDepositButton:GetScript("OnClick")
-
-    GuildBankDepositButton:SetScript("OnClick", function(self, button)
-        if button == "LeftButton" and IsShiftKeyDown() and GuildBankFrame and GuildBankFrame:IsShown() then
-            EnsureDB()
-            local keep = AscBankSortDB.keepGoldCopper or 0
-            local playerMoney = GetMoney() or 0
-            local toDeposit = math.max(0, playerMoney - keep)
-
-            if toDeposit <= 0 then
-                Print(("No excess gold to deposit. Reserve: %s"):format(FormatMoneyShort(keep)), 1, 1, 0)
-                return
-            end
-
-            DepositGuildBankMoney(toDeposit)
-            Print(("Deposited %s (kept %s). Use /absort keepgold <gold> to change reserve."):format(FormatMoneyShort(toDeposit), FormatMoneyShort(keep)), 0.2, 1, 0.2)
-            return
-        end
-
-        if originalOnClick then
-            originalOnClick(self, button)
-        end
+local function HookGuildDepositButton(btn)
+    if not btn or btn.AscBankSortDepositHooked or not btn.GetScript or not btn.SetScript then return false end
+    local originalOnClick = btn:GetScript("OnClick")
+    btn:SetScript("OnClick", function(self, button)
+        InterceptGuildDepositClick(self, button, originalOnClick)
     end)
+    btn.AscBankSortDepositHooked = true
+    return true
+end
 
-    gbankDepositHooked = true
+local function TryHookGuildBankDepositButton()
+    local hookedAny = false
+    hookedAny = HookGuildDepositButton(_G.GuildBankDepositButton) or hookedAny
+    hookedAny = HookGuildDepositButton(_G.GuildBankFrameDepositButton) or hookedAny
+
+    if not gbankDepositPopupHooked and StaticPopup_Show and hooksecurefunc then
+        hooksecurefunc("StaticPopup_Show", function(which)
+            if which == "GUILDBANK_DEPOSIT" and not autoDepositInProgress and IsShiftKeyDown() and GuildBankFrame and GuildBankFrame:IsShown() then
+                if StaticPopup_Hide then
+                    StaticPopup_Hide("GUILDBANK_DEPOSIT")
+                end
+                DoReserveDeposit()
+            end
+        end)
+        gbankDepositPopupHooked = true
+    end
+
+    if hookedAny then
+        gbankDepositHooked = true
+    end
 end
 
 SLASH_ASCBANKSORT1 = "/absort"
@@ -142,18 +168,18 @@ SlashCmdList["ASCBANKSORT"] = function(msg)
     if cmd == "keepgold" then
         local copper = ParseGoldToCopper(rest)
         if copper == nil then
-            Print("Usage: /absort keepgold <gold>. Example: /asb keepgold 100", 1, 1, 0)
-            Print(("Current reserve: %s"):format(FormatMoneyShort(AscBankSortDB.keepGoldCopper or 0)), 1, 1, 0)
+            Print("Usage: /absort keepgold <gold>. Example: /absort keepgold 100", 1, 1, 0)
+            Print(("Current reserve: %s"):format(FormatMoneyShort(GetKeepGoldCopper())), 1, 1, 0)
             return
         end
-        AscBankSortDB.keepGoldCopper = copper
+        SetKeepGoldCopper(copper)
         Print(("Guild bank Shift+Click reserve set to %s."):format(FormatMoneyShort(copper)), 0.2, 1, 0.2)
         return
     end
 
     Print("AscBankSort commands:", 1, 1, 0)
     Print("  /absort keepgold <gold> - Keep this much gold when Shift+Click depositing to guild bank.", 1, 1, 0)
-    Print(("Current reserve: %s"):format(FormatMoneyShort(AscBankSortDB.keepGoldCopper or 0)), 1, 1, 0)
+    Print(("Current reserve: %s"):format(FormatMoneyShort(GetKeepGoldCopper())), 1, 1, 0)
 end
 
 -- =========================
@@ -603,78 +629,6 @@ end)
 -- =========================
 -- Guild bank button creation
 -- =========================
-local gbankDepositHooked = false
-local function TryHookGuildBankDepositButton()
-    if gbankDepositHooked then return end
-    if not GuildBankDepositButton or not GuildBankDepositButton.HookScript then return end
-
-    GuildBankDepositButton:HookScript("OnClick", function(_, button)
-        if button ~= "LeftButton" and button ~= nil then return end
-        if not IsShiftKeyDown() then return end
-        if not GuildBankFrame or not GuildBankFrame:IsShown() then return end
-
-        local keepGold = GetKeepGoldCopper()
-        local playerMoney = GetMoney() or 0
-        local deposit = math.max(0, playerMoney - keepGold)
-
-        if deposit > 0 then
-            DepositGuildBankMoney(deposit)
-            Print(("Deposited %s (reserve kept: %s)."):format(FormatCopper(deposit), FormatCopper(keepGold)), 0.2, 1, 0.2)
-        else
-            Print("No excess gold to deposit (reserve protected).", 1, 1, 0)
-        end
-    end)
-
-    gbankDepositHooked = true
-end
-
-local function ParseGoldToCopper(input)
-    if not input then return nil end
-    local num = tonumber(input)
-    if not num then return nil end
-
-    local copper = math.floor((num * 10000) + 0.5)
-    if copper < 0 then copper = 0 end
-    return copper
-end
-
-local function PrintKeepGoldStatus()
-    local keep = GetKeepGoldCopper()
-    Print(("Guild bank reserve is set to %s. Usage: /abs keepgold <gold>"):format(FormatCopper(keep)), 1, 1, 0)
-end
-
-local function HandleSlash(msg)
-    EnsureDB()
-    local text = (msg or ""):match("^%s*(.-)%s*$")
-    if text == "" then
-        PrintKeepGoldStatus()
-        return
-    end
-
-    local cmd, value = text:match("^(%S+)%s*(.-)$")
-    cmd = cmd and cmd:lower() or ""
-
-    if cmd == "keepgold" then
-        value = value and value:match("^%s*(.-)%s*$") or ""
-        if value == "" then
-            PrintKeepGoldStatus()
-            return
-        end
-
-        local copper = ParseGoldToCopper(value)
-        if not copper then
-            Print("Invalid amount. Usage: /abs keepgold <gold>", 1, 0.2, 0.2)
-            return
-        end
-
-        SetKeepGoldCopper(copper)
-        Print(("Guild bank reserve updated to %s."):format(FormatCopper(GetKeepGoldCopper())), 0.2, 1, 0.2)
-        return
-    end
-
-    Print("Unknown command. Usage: /abs keepgold <gold>", 1, 1, 0)
-end
-
 local gbankBtnCreated = false
 local function CreateGuildBankButton()
     TryHookGuildBankDepositButton()
@@ -705,9 +659,6 @@ local function CreateGuildBankButton()
 
     TryHookGuildBankDepositButton()
 end
-
-SLASH_ASCBANKSORT1 = "/absort"
-SlashCmdList["ASCBANKSORT"] = HandleSlash
 
 -- =========================
 -- Events / hooks
@@ -744,5 +695,4 @@ if GuildBankFrame and GuildBankFrame.HookScript then
     GuildBankFrame:HookScript("OnShow", CreateGuildBankButton)
 end
 TryHookGuildBankDepositButton()
-
 
