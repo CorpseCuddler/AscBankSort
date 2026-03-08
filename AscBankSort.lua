@@ -28,6 +28,94 @@ local function ClearCursorSafe()
     end
 end
 
+local ADDON_NAME = "AscBankSort"
+local DEFAULT_KEEP_GOLD_COPPER = 0
+
+local function EnsureDB()
+    AscBankSortDB = AscBankSortDB or {}
+    if type(AscBankSortDB.keepGoldCopper) ~= "number" or AscBankSortDB.keepGoldCopper < 0 then
+        AscBankSortDB.keepGoldCopper = DEFAULT_KEEP_GOLD_COPPER
+    end
+end
+
+local function FormatMoneyShort(copper)
+    copper = math.max(0, math.floor(tonumber(copper) or 0))
+    local g = math.floor(copper / 10000)
+    local s = math.floor((copper % 10000) / 100)
+    local c = copper % 100
+    return ("%dg %ds %dc"):format(g, s, c)
+end
+
+local function ParseGoldToCopper(text)
+    if not text then return nil end
+    local cleaned = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
+    if cleaned == "" then return nil end
+
+    local value = tonumber(cleaned)
+    if not value then return nil end
+    if value < 0 then value = 0 end
+
+    return math.floor(value * 10000 + 0.5)
+end
+
+local gbankDepositHooked = false
+local function TryHookGuildBankDepositButton()
+    if gbankDepositHooked then return end
+    if not GuildBankDepositButton or not GuildBankDepositButton.GetScript then return end
+
+    local originalOnClick = GuildBankDepositButton:GetScript("OnClick")
+
+    GuildBankDepositButton:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" and IsShiftKeyDown() and GuildBankFrame and GuildBankFrame:IsShown() then
+            EnsureDB()
+            local keep = AscBankSortDB.keepGoldCopper or 0
+            local playerMoney = GetMoney() or 0
+            local toDeposit = math.max(0, playerMoney - keep)
+
+            if toDeposit <= 0 then
+                Print(("No excess gold to deposit. Reserve: %s"):format(FormatMoneyShort(keep)), 1, 1, 0)
+                return
+            end
+
+            DepositGuildBankMoney(toDeposit)
+            Print(("Deposited %s (kept %s). Use /asb keepgold <gold> to change reserve."):format(FormatMoneyShort(toDeposit), FormatMoneyShort(keep)), 0.2, 1, 0.2)
+            return
+        end
+
+        if originalOnClick then
+            originalOnClick(self, button)
+        end
+    end)
+
+    gbankDepositHooked = true
+end
+
+SLASH_ASCBANKSORT1 = "/asb"
+SLASH_ASCBANKSORT2 = "/ascbanksort"
+SlashCmdList["ASCBANKSORT"] = function(msg)
+    EnsureDB()
+
+    local trimmed = (msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local cmd, rest = trimmed:match("^(%S+)%s*(.-)$")
+    cmd = cmd and string.lower(cmd) or nil
+
+    if cmd == "keepgold" then
+        local copper = ParseGoldToCopper(rest)
+        if copper == nil then
+            Print("Usage: /asb keepgold <gold>. Example: /asb keepgold 100", 1, 1, 0)
+            Print(("Current reserve: %s"):format(FormatMoneyShort(AscBankSortDB.keepGoldCopper or 0)), 1, 1, 0)
+            return
+        end
+        AscBankSortDB.keepGoldCopper = copper
+        Print(("Guild bank Shift+Click reserve set to %s."):format(FormatMoneyShort(copper)), 0.2, 1, 0.2)
+        return
+    end
+
+    Print("AscBankSort commands:", 1, 1, 0)
+    Print("  /asb keepgold <gold> - Keep this much gold when Shift+Click depositing to guild bank.", 1, 1, 0)
+    Print(("Current reserve: %s"):format(FormatMoneyShort(AscBankSortDB.keepGoldCopper or 0)), 1, 1, 0)
+end
+
 -- =========================
 -- Bank button (built-in sort)
 -- =========================
@@ -501,6 +589,8 @@ local function CreateGuildBankButton()
             StartGuildBankSortCurrentTab()
         end
     )
+
+    TryHookGuildBankDepositButton()
 end
 
 -- =========================
@@ -517,13 +607,15 @@ f:SetScript("OnEvent", function(_, event, arg1)
     elseif event == "GUILDBANKFRAME_OPENED" then
         CreateGuildBankButton()
     elseif event == "ADDON_LOADED" then
-        if arg1 == "AscBankSort" then
+        if arg1 == ADDON_NAME then
+            EnsureDB()
             if BankFrame and BankFrame.HookScript then
                 BankFrame:HookScript("OnShow", CreateBankButton)
             end
             if GuildBankFrame and GuildBankFrame.HookScript then
                 GuildBankFrame:HookScript("OnShow", CreateGuildBankButton)
             end
+            TryHookGuildBankDepositButton()
         end
     end
 end)
@@ -534,5 +626,7 @@ end
 if GuildBankFrame and GuildBankFrame.HookScript then
     GuildBankFrame:HookScript("OnShow", CreateGuildBankButton)
 end
+
+TryHookGuildBankDepositButton()
 
 
